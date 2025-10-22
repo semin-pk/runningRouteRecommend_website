@@ -61,7 +61,7 @@ async def kakao_keyword_search(
 	x: float,
 	y: float,
 	radius_m: int,
-	page_limit: int = 3,
+	page_limit: int = 30,
 ) -> List[Dict[str, Any]]:
 	"""Query Kakao Local Keyword Search API around a point within radius.
 	Collect multiple pages up to page_limit.
@@ -74,31 +74,28 @@ async def kakao_keyword_search(
 	results: List[Dict[str, Any]] = []
 
 	async with httpx.AsyncClient(timeout=10.0) as client:
-		for page in range(1, page_limit + 1):
-			params = {
-				"query": query,
-				"x": x,
-				"y": y,
-				"radius": radius_m,  # meters; Kakao supports up to 20000 for some endpoints
-				"page": page,
-				"size": 15,
-			}
-			r = await client.get(url, headers=headers, params=params)
-			if r.status_code != 200:
-				error_text = r.text
-				if "NotAuthorizedError" in error_text and "OPEN_MAP_AND_LOCAL" in error_text:
-					raise HTTPException(
-						status_code=403, 
-						detail="Kakao Local API service is not enabled. Please enable 'OPEN_MAP_AND_LOCAL' service in your Kakao Developers console."
-					)
-				raise HTTPException(status_code=502, detail=f"Kakao API error: {error_text}")
-			data = r.json()
-			documents = data.get("documents", [])
-			results.extend(documents)
-			meta = data.get("meta", {})
-			is_end = meta.get("is_end", True)
-			if is_end:
-				break
+		# 마지막 페이지부터 시작해서 장소들을 수집
+		params = {
+			"query": query,
+			"x": x,
+			"y": y,
+			"radius": radius_m,  # meters; Kakao supports up to 20000 for some endpoints
+			"sort": "distance",
+			"page": page_limit,  # 마지막 페이지부터 시작
+			"size": 15,
+		}
+		r = await client.get(url, headers=headers, params=params)
+		if r.status_code != 200:
+			error_text = r.text
+			if "NotAuthorizedError" in error_text and "OPEN_MAP_AND_LOCAL" in error_text:
+				raise HTTPException(
+					status_code=403, 
+					detail="Kakao Local API service is not enabled. Please enable 'OPEN_MAP_AND_LOCAL' service in your Kakao Developers console."
+				)
+			raise HTTPException(status_code=502, detail=f"Kakao API error: {error_text}")
+		data = r.json()
+		documents = data.get("documents", [])
+		results.extend(documents)
 	return results
 
 
@@ -130,7 +127,7 @@ async def recommend(req: RecommendRequest) -> RecommendResponse:
 	# Convert to meters for Kakao radius; cap at 20000 per API common practice
 	radius_m = int(min(max(desired_km * 1000, 500), 20000))
 
-	places = await kakao_keyword_search(keyword, x=start_lng, y=start_lat, radius_m=radius_m, page_limit=3)
+	places = await kakao_keyword_search(keyword, x=start_lng, y=start_lat, radius_m=radius_m, page_limit=30)
 
 	if not places:
 		# Build a simple URL that at least shows the start point
@@ -167,12 +164,44 @@ async def recommend(req: RecommendRequest) -> RecommendResponse:
 		])
 		return RecommendResponse(selected_place=None, route_url=route_url, candidates_considered=0)
 
-	# Filter within a tolerance band around the desired distance
-	tolerance = max(0.2, desired_km * 0.15)  # at least 200m, or 15%
-	band = [p for p in scored if abs(p["distance_km"] - desired_km) <= tolerance]
-	pool = band if band else scored[: min(10, len(scored))]
+	# 거리별로 정렬 (사용자가 원하는 거리에 가까운 순서)
+	scored.sort(key=lambda x: x["distance_delta"])
+	
+	# 러닝 거리 계산: 왕복 또는 원형 코스 고려
+	# 사용자가 원하는 거리의 절반 지점에 있는 장소를 찾아야 함
+	# 예: 5km 러닝을 원한다면 2.5km 지점의 장소를 찾아야 함
+	target_distance = desired_km / 2  # 왕복을 고려한 목표 거리
+	
+	# 허용 오차: 최소 200m 또는 목표 거리의 25%
+	tolerance = max(0.2, target_distance * 0.25)
+	
+	# 1차: 목표 거리(왕복의 절반) 허용 오차 내의 장소들
+	perfect_matches = [p for p in scored if abs(p["distance_km"] - target_distance) <= tolerance]
+	
+	# 2차: 목표 거리의 1.5배 허용 오차 내의 장소들
+	good_matches = [p for p in scored if abs(p["distance_km"] - target_distance) <= tolerance * 1.5]
+	
+	# 3차: 모든 장소 중 상위 10개
+	fallback_matches = scored[:min(10, len(scored))]
+	
+	# 선택 우선순위: perfect_matches > good_matches > fallback_matches
+	if perfect_matches:
+		pool = perfect_matches
+		print(f"Found {len(perfect_matches)} perfect matches for {desired_km:.1f}km run (target: {target_distance:.1f}km ± {tolerance:.1f}km)")
+	elif good_matches:
+		pool = good_matches
+		print(f"Found {len(good_matches)} good matches for {desired_km:.1f}km run (target: {target_distance:.1f}km ± {tolerance*1.5:.1f}km)")
+	else:
+		pool = fallback_matches
+		print(f"Using fallback: top {len(fallback_matches)} closest places for {desired_km:.1f}km run")
 
+	# 랜덤 선택
 	selected = random.choice(pool)
+	
+	# 왕복 거리 계산
+	round_trip_distance = selected.get('distance_km', 0) * 2
+	
+	print(f"Selected: {selected.get('place_name', 'Unknown')} at {selected.get('distance_km', 0):.2f}km (round trip: {round_trip_distance:.2f}km, target: {desired_km:.2f}km)")
 
 	# Build route URL from start to selected destination
 	dest_name = selected.get("place_name") or selected.get("place_url", "Destination")

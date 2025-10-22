@@ -9,28 +9,71 @@ function useKakaoLoader() {
 	const [error, setError] = useState(null)
 	useEffect(() => {
 		console.log('KAKAO_JS_KEY:', KAKAO_JS_KEY)
-		if (window.kakao && window.kakao.maps) {
-			console.log('Kakao already loaded')
-			setLoaded(true)
-			return
-		}
+		
 		if (!KAKAO_JS_KEY) {
 			console.error('KAKAO_JS_KEY is not set')
 			setError('KAKAO_JS_KEY is not set')
 			return
 		}
-		const script = document.createElement('script')
-		script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}`
-		script.async = true
-		script.onload = () => {
-			console.log('Kakao script loaded')
+
+		// 이미 로드된 경우
+		if (window.kakao && window.kakao.maps && window.kakao.maps.Map) {
+			console.log('Kakao already loaded')
 			setLoaded(true)
+			return
 		}
+
+		// 스크립트가 이미 로드 중인지 확인
+		const existingScript = document.querySelector('script[src*="dapi.kakao.com"]')
+		if (existingScript) {
+			console.log('Kakao script already exists, waiting for load...')
+			// 기존 스크립트가 로드될 때까지 기다림
+			const checkLoaded = () => {
+				if (window.kakao && window.kakao.maps && window.kakao.maps.Map) {
+					console.log('Kakao Maps API ready')
+					setLoaded(true)
+				} else {
+					setTimeout(checkLoaded, 100)
+				}
+			}
+			checkLoaded()
+			return
+		}
+
+		// 새 스크립트 로드
+		const script = document.createElement('script')
+		script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&autoload=false`
+		script.async = true
+		
+		script.onload = () => {
+			console.log('Kakao script loaded, initializing...')
+			// kakao.maps.load() 사용하여 완전한 로딩 대기
+			if (window.kakao && window.kakao.maps && window.kakao.maps.load) {
+				window.kakao.maps.load(() => {
+					console.log('Kakao Maps API fully loaded')
+					setLoaded(true)
+				})
+			} else {
+				// fallback: 직접 확인
+				const checkLoaded = () => {
+					if (window.kakao && window.kakao.maps && window.kakao.maps.Map) {
+						console.log('Kakao Maps API ready (fallback)')
+						setLoaded(true)
+					} else {
+						setTimeout(checkLoaded, 100)
+					}
+				}
+				checkLoaded()
+			}
+		}
+		
 		script.onerror = (e) => {
 			console.error('Failed to load Kakao script:', e)
 			setError('Failed to load Kakao Maps')
 		}
+		
 		document.head.appendChild(script)
+		
 		return () => {
 			if (document.head.contains(script)) {
 				document.head.removeChild(script)
@@ -47,21 +90,37 @@ function MapPicker({ onPick }) {
 
 	useEffect(() => {
 		if (!loaded || !ref.current) return
+		
+		console.log('Initializing Kakao Map...')
 		const kakao = window.kakao
-		const map = new kakao.maps.Map(ref.current, {
-			center: new kakao.maps.LatLng(37.5665, 126.978),
-			level: 5,
-		})
-		const marker = new kakao.maps.Marker({ position: map.getCenter() })
-		marker.setMap(map)
-		kakao.maps.event.addListener(map, 'click', function (mouseEvent) {
-			const latlng = mouseEvent.latLng
-			marker.setPosition(latlng)
-			const lat = latlng.getLat()
-			const lng = latlng.getLng()
-			setCoords({ lat, lng })
-			onPick(lat, lng)
-		})
+		
+		try {
+			// 지도 생성
+			const map = new kakao.maps.Map(ref.current, {
+				center: new kakao.maps.LatLng(37.5665, 126.978),
+				level: 5,
+			})
+			
+			// 마커 생성
+			const marker = new kakao.maps.Marker({ 
+				position: map.getCenter() 
+			})
+			marker.setMap(map)
+			
+			// 클릭 이벤트 등록
+			kakao.maps.event.addListener(map, 'click', function (mouseEvent) {
+				const latlng = mouseEvent.latLng
+				marker.setPosition(latlng)
+				const lat = latlng.getLat()
+				const lng = latlng.getLng()
+				setCoords({ lat, lng })
+				onPick(lat, lng)
+			})
+			
+			console.log('Kakao Map initialized successfully')
+		} catch (error) {
+			console.error('Error initializing Kakao Map:', error)
+		}
 	}, [loaded, onPick])
 
 	if (error) {
@@ -164,17 +223,56 @@ export default function App() {
 			{error && <div style={{ color: 'crimson', marginTop: 12 }}>{error}</div>}
 
 			{result && (
-				<div style={{ marginTop: 16 }}>
-					<div style={{ marginBottom: 8 }}>
-						추천 장소: {result.selected_place?.place_name ?? '없음'}
-						{result.candidates_considered === 0 && (
-							<div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+				<div style={{ marginTop: 16, padding: 16, backgroundColor: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef' }}>
+					<div style={{ marginBottom: 12 }}>
+						<h3 style={{ margin: '0 0 8px 0', color: '#333' }}>🏃‍♂️ 러닝 코스 추천</h3>
+						{result.selected_place ? (
+							<div>
+								<div style={{ fontSize: 18, color: '#666',fontWeight: 'bold', marginBottom: 8 }}>
+									📍 {result.selected_place.place_name}
+								</div>
+								<div style={{ fontSize: 14, color: '#666', marginBottom: 4 }}>
+									편도 거리: <strong>{result.selected_place.distance_km}km</strong>
+								</div>
+								<div style={{ fontSize: 14, color: '#007bff', marginBottom: 4, fontWeight: 'bold' }}>
+									왕복 러닝 거리: <strong>{(result.selected_place.distance_km * 2).toFixed(1)}km</strong> (목표: {distanceKm}km)
+								</div>
+								{result.selected_place.address_name && (
+									<div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
+										주소: {result.selected_place.address_name}
+									</div>
+								)}
+								{result.selected_place.phone && (
+									<div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
+										전화: {result.selected_place.phone}
+									</div>
+								)}
+								<div style={{ fontSize: 12, color: '#666' }}>
+									검토된 장소: {result.candidates_considered}개 중 선택
+								</div>
+							</div>
+						) : (
+							<div style={{ color: '#666' }}>
 								해당 지역에서 '{theme}' 테마의 장소를 찾을 수 없습니다.
+								다른 테마나 거리를 시도해보세요.
 							</div>
 						)}
 					</div>
-					<a href={result.route_url} target="_blank" rel="noreferrer">
-						걷기 길찾기 열기
+					<a 
+						href={result.route_url} 
+						target="_blank" 
+						rel="noreferrer"
+						style={{ 
+							display: 'inline-block',
+							padding: '8px 16px',
+							backgroundColor: '#007bff',
+							color: 'white',
+							textDecoration: 'none',
+							borderRadius: 4,
+							fontSize: 14
+						}}
+					>
+						🗺️ 걷기 길찾기 열기
 					</a>
 				</div>
 			)}
