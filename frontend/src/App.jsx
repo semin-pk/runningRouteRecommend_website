@@ -161,18 +161,73 @@ function MapPicker({ onPick }) {
 export default function App() {
 	const [lat, setLat] = useState(null)
 	const [lng, setLng] = useState(null)
-	const [distanceKm, setDistanceKm] = useState(5)
-	const [theme, setTheme] = useState('카페')
+	const [totalDistanceKm, setTotalDistanceKm] = useState(7)
+	const [isRoundTrip, setIsRoundTrip] = useState(true)
+	const [waypoints, setWaypoints] = useState([
+		{ theme_keyword: '카페', order: 1 },
+		{ theme_keyword: '맛집', order: 2 },
+		{ theme_keyword: '맥주', order: 3 }
+	])
 	const [loading, setLoading] = useState(false)
 	const [result, setResult] = useState(null)
 	const [error, setError] = useState(null)
 
-	const canSubmit = lat !== null && lng !== null && distanceKm > 0 && theme.trim().length > 0
+	const canSubmit = lat !== null && lng !== null && totalDistanceKm > 0 && waypoints.length > 0
 
 	const onPick = useCallback((la, ln) => {
 		setLat(la)
 		setLng(ln)
 	}, [])
+
+	const addWaypoint = () => {
+		const newOrder = Math.max(...waypoints.map(w => w.order), 0) + 1
+		setWaypoints([...waypoints, { theme_keyword: '', order: newOrder }])
+	}
+
+	const removeWaypoint = (order) => {
+		setWaypoints(waypoints.filter(w => w.order !== order).map((w, index) => ({ ...w, order: index + 1 })))
+	}
+
+	const updateWaypoint = (order, theme_keyword) => {
+		setWaypoints(waypoints.map(w => w.order === order ? { ...w, theme_keyword } : w))
+	}
+
+	const [draggedItem, setDraggedItem] = useState(null)
+
+	const handleDragStart = (e, order) => {
+		setDraggedItem(order)
+		e.dataTransfer.effectAllowed = 'move'
+	}
+
+	const handleDragOver = (e) => {
+		e.preventDefault()
+		e.dataTransfer.dropEffect = 'move'
+	}
+
+	const handleDrop = (e, targetOrder) => {
+		e.preventDefault()
+		if (!draggedItem || draggedItem === targetOrder) return
+
+		const draggedIndex = waypoints.findIndex(w => w.order === draggedItem)
+		const targetIndex = waypoints.findIndex(w => w.order === targetOrder)
+		
+		const newWaypoints = [...waypoints]
+		const draggedWaypoint = newWaypoints[draggedIndex]
+		
+		// 드래그된 항목 제거
+		newWaypoints.splice(draggedIndex, 1)
+		// 타겟 위치에 삽입
+		newWaypoints.splice(targetIndex, 0, draggedWaypoint)
+		
+		// 순서 재정렬
+		const reorderedWaypoints = newWaypoints.map((w, index) => ({ ...w, order: index + 1 }))
+		setWaypoints(reorderedWaypoints)
+		setDraggedItem(null)
+	}
+
+	const handleDragEnd = () => {
+		setDraggedItem(null)
+	}
 
 	const submit = async () => {
 		if (!canSubmit || !BACKEND_URL) return
@@ -180,10 +235,18 @@ export default function App() {
 		setError(null)
 		setResult(null)
 		try {
+			const requestBody = {
+				start_lat: lat,
+				start_lng: lng,
+				total_distance_km: totalDistanceKm,
+				waypoints: waypoints.filter(w => w.theme_keyword.trim().length > 0),
+				is_round_trip: isRoundTrip
+			}
+			
 			const r = await fetch(`${BACKEND_URL}/api/recommend`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ start_lat: lat, start_lng: lng, distance_km: distanceKm, theme_keyword: theme }),
+				body: JSON.stringify(requestBody),
 			})
 			if (!r.ok) throw new Error(await r.text())
 			const data = await r.json()
@@ -202,59 +265,193 @@ export default function App() {
 
 	return (
 		<div style={{ maxWidth: 960, margin: '0 auto', padding: 16 }}>
-			<h2>러닝 코스 랜덤 추천</h2>
+			<h2>🏃‍♂️ 러닝 코스 랜덤 추천</h2>
 			<MapPicker onPick={onPick} />
-			<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
-				<div>
-					<label>러닝 거리 (km)</label>
-					<input type="number" value={distanceKm} min={0.5} step={0.5} onChange={(e) => setDistanceKm(Number(e.target.value))} style={{ width: '100%' }} />
+			
+			<div style={{ marginTop: 16 }}>
+				<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+					<div>
+						<label>총 러닝 거리 (km)</label>
+						<input 
+							type="number" 
+							value={totalDistanceKm} 
+							min={1} 
+							step={0.5} 
+							onChange={(e) => setTotalDistanceKm(Number(e.target.value))} 
+							style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid #ddd' }} 
+						/>
+					</div>
+					<div>
+						<label>왕복/편도</label>
+						<div style={{ display: 'flex', gap: 20, marginTop: 4, justifyContent: 'center' }}>
+							<label style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+								<input 
+									type="radio" 
+									checked={isRoundTrip} 
+									onChange={() => setIsRoundTrip(true)}
+								/>
+								왕복
+							</label>
+							<label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+								<input 
+									type="radio" 
+									checked={!isRoundTrip} 
+									onChange={() => setIsRoundTrip(false)}
+								/>
+								편도
+							</label>
+						</div>
+					</div>
 				</div>
-				<div>
-					<label>테마</label>
-					<input value={theme} onChange={(e) => setTheme(e.target.value)} placeholder="맥주 / 카페 / 맛집" style={{ width: '100%' }} />
+
+				<div style={{ marginBottom: 16 }}>
+					<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+						<div>
+							<label>경유지 설정</label>
+							<div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+								드래그하여 순서를 변경할 수 있습니다
+							</div>
+						</div>
+						<button 
+							onClick={addWaypoint}
+							style={{ 
+								padding: '4px 12px', 
+								backgroundColor: '#28a745', 
+								color: 'white', 
+								border: 'none', 
+								borderRadius: 4,
+								cursor: 'pointer'
+							}}
+						>
+							+ 경유지 추가
+						</button>
+					</div>
+					
+					{waypoints.map((waypoint, index) => (
+						<div 
+							key={waypoint.order} 
+							draggable
+							onDragStart={(e) => handleDragStart(e, waypoint.order)}
+							onDragOver={handleDragOver}
+							onDrop={(e) => handleDrop(e, waypoint.order)}
+							onDragEnd={handleDragEnd}
+							style={{ 
+								display: 'flex', 
+								alignItems: 'center', 
+								gap: 8, 
+								marginBottom: 8,
+								padding: 8,
+								backgroundColor: draggedItem === waypoint.order ? '#e3f2fd' : '#f8f9fa',
+								borderRadius: 4,
+								cursor: 'move',
+								border: draggedItem === waypoint.order ? '2px dashed #2196f3' : '1px solidrgb(6, 85, 163)',
+								opacity: draggedItem === waypoint.order ? 0.7 : 1,
+								transition: 'all 0.2s ease'
+							}}
+						>
+							<span style={{ 
+								minWidth: 20, 
+								fontWeight: 'bold',
+								color: 'rgb(25, 24, 24)',
+								display: 'flex',
+								alignItems: 'center',
+								gap: 4
+							}}>
+								<span style={{ fontSize: 12 , color: 'rgb(87, 89, 90)'}}>⋮⋮</span>
+								{waypoint.order}
+							</span>
+							<input 
+								value={waypoint.theme_keyword}
+								onChange={(e) => updateWaypoint(waypoint.order, e.target.value)}
+								placeholder="경유지 키워드 (예: 카페, 맛집, 맥주)"
+								style={{ flex: 1, padding: 8, borderRadius: 4, border: '1px solid #ddd' }}
+								onMouseDown={(e) => e.stopPropagation()}
+							/>
+							<button 
+								onClick={() => removeWaypoint(waypoint.order)}
+								style={{ 
+									padding: '4px 8px', 
+									backgroundColor: 'rgb(13, 2, 4)', 
+									color: 'white', 
+									border: 'none', 
+									borderRadius: 4,
+									cursor: 'pointer'
+								}}
+							>
+								×
+							</button>
+						</div>
+					))}
 				</div>
-				<div style={{ alignSelf: 'end' }}>
-					<button disabled={!canSubmit || loading} onClick={submit} style={{ width: '100%' }}>
-						{loading ? '추천중...' : '추천 받기'}
+
+				<div style={{ textAlign: 'center' }}>
+					<button 
+						disabled={!canSubmit || loading} 
+						onClick={submit} 
+						style={{ 
+							padding: '12px 24px', 
+							backgroundColor: canSubmit && !loading ? '#007bff' : '#ccc', 
+							color: 'white', 
+							border: 'none', 
+							borderRadius: 4,
+							fontSize: 16,
+							cursor: canSubmit && !loading ? 'pointer' : 'not-allowed'
+						}}
+					>
+						{loading ? '추천중...' : '러닝 코스 추천 받기'}
 					</button>
 				</div>
 			</div>
 
-			{error && <div style={{ color: 'crimson', marginTop: 12 }}>{error}</div>}
+			{error && <div style={{ color: 'crimson', marginTop: 12, padding: 12, backgroundColor: '#f8d7da', borderRadius: 4 }}>{error}</div>}
 
 			{result && (
 				<div style={{ marginTop: 16, padding: 16, backgroundColor: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef' }}>
 					<div style={{ marginBottom: 12 }}>
-						<h3 style={{ margin: '0 0 8px 0', color: '#333' }}>🏃‍♂️ 러닝 코스 추천</h3>
-						{result.selected_place ? (
+						<h3 style={{ margin: '0 0 8px 0', color: '#333' }}>🏃‍♂️ 러닝 코스 추천 결과</h3>
+						<div style={{ fontSize: 16, color: '#007bff', fontWeight: 'bold', marginBottom: 12 }}>
+							목표 러닝 거리: <strong>{result.total_distance_km}km</strong> | 
+							실제 총 거리: <strong>{result.actual_total_distance_km}km</strong> ({result.is_round_trip ? '왕복' : '편도'})
+						</div>
+						
+						{result.waypoints && result.waypoints.length > 0 ? (
 							<div>
-								<div style={{ fontSize: 18, color: '#666',fontWeight: 'bold', marginBottom: 8 }}>
-									📍 {result.selected_place.place_name}
-								</div>
-								<div style={{ fontSize: 14, color: '#666', marginBottom: 4 }}>
-									편도 거리: <strong>{result.selected_place.distance_km}km</strong>
-								</div>
-								<div style={{ fontSize: 14, color: '#007bff', marginBottom: 4, fontWeight: 'bold' }}>
-									왕복 러닝 거리: <strong>{(result.selected_place.distance_km * 2).toFixed(1)}km</strong> (목표: {distanceKm}km)
-								</div>
-								{result.selected_place.address_name && (
-									<div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-										주소: {result.selected_place.address_name}
+								{result.waypoints.map((waypoint, index) => (
+									<div key={waypoint.order} style={{ 
+										marginBottom: 12, 
+										padding: 12, 
+										backgroundColor: 'white', 
+										borderRadius: 4,
+										border: '1px solid #dee2e6'
+									}}>
+										<div style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 4 }}>
+											<span style={{ color: '#666' }}>📍 경유지 {waypoint.order}:</span> 
+											<span style={{ color: '#000', marginLeft: 8 }}>{waypoint.place_name}</span>
+										</div>
+										<div style={{ fontSize: 14, color: '#666', marginBottom: 4 }}>
+											테마: <strong>{waypoint.theme_keyword}</strong> | 
+											거리: <strong>{waypoint.distance_km.toFixed(2)}km</strong>
+										</div>
+										{waypoint.address_name && (
+											<div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
+												주소: {waypoint.address_name}
+											</div>
+										)}
+										{waypoint.phone && (
+											<div style={{ fontSize: 12, color: '#888' }}>
+												전화: {waypoint.phone}
+											</div>
+										)}
 									</div>
-								)}
-								{result.selected_place.phone && (
-									<div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-										전화: {result.selected_place.phone}
-									</div>
-								)}
-								<div style={{ fontSize: 12, color: '#666' }}>
+								))}
+								
+								<div style={{ fontSize: 12, color: '#666', marginTop: 8 }}>
 									검토된 장소: {result.candidates_considered}개 중 선택
 								</div>
 							</div>
 						) : (
 							<div style={{ color: '#666' }}>
-								해당 지역에서 '{theme}' 테마의 장소를 찾을 수 없습니다.
-								다른 테마나 거리를 시도해보세요.
+								경유지를 찾을 수 없습니다. 다른 키워드나 거리를 시도해보세요.
 							</div>
 						)}
 					</div>
