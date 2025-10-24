@@ -1,0 +1,41 @@
+name: Deploy to AWS Lambda (Serverless)
+
+on:
+  push:
+    branches: [ "main" ]        # 원하는 브랜치로 변경
+  workflow_dispatch:            # 수동 실행 버튼
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (Serverless CLI 필요)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Serverless + plugin
+        run: |
+          npm i -g serverless@3 serverless-python-requirements
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      # (선택) Docker 로그인은 필요없음. GitHub 호스트의 Docker를 그대로 사용
+      # serverless-python-requirements가 dockerizePip: true로 컨테이너 빌드 진행
+
+      - name: Deploy with Serverless
+        run: sls deploy --stage prod

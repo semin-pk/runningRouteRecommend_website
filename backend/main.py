@@ -7,6 +7,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
+# (파일 상단에)  from mangum import Mangum
 
 
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "faa3869240e454c8a6be06fbc2974992")
@@ -377,3 +378,7 @@ if __name__ == "__main__":
 
 	uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
 
+from mangum import Mangum
+
+# FastAPI app = FastAPI(...) 이미 있음
+handler = Mangum(app)  # <-- Lambda 엔트리포인트

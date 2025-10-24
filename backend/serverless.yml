@@ -1,0 +1,57 @@
+service: fastapi-running-route
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: python3.12
+  region: ap-northeast-2
+  memorySize: 512
+  timeout: 15
+  architecture: x86_64   # arm64도 가능. 이미지/네이티브 확장 없으면 arm64가 저렴.
+  environment:
+    # 예) SSM 파라미터를 환경변수로 노출 (필요 없으면 삭제)
+    KAKAO_REST_API_KEY: ${ssm:/fastapi-running-route/KAKAO_REST_API_KEY}
+
+  iam:
+    role:
+      statements:
+        # SSM SecureString 읽기 (위 environment에서 ssm 참조 시 필요)
+        - Effect: Allow
+          Action:
+            - ssm:GetParameter
+          Resource: arn:aws:ssm:${self:provider.region}:*:parameter/fastapi-running-route/*
+        # (SecureString일 경우 KMS 복호화가 필요할 수 있음)
+        - Effect: Allow
+          Action:
+            - kms:Decrypt
+          Resource: "*"
+
+functions:
+  api:
+    handler: backend.main.handler
+    events:
+      - httpApi:
+          method: ANY
+          path: /
+      - httpApi:
+          method: ANY
+          path: /{proxy+}
+
+package:
+  # 서비스 단위 패키징. 포함/제외 패턴 지정
+  patterns:
+    - backend/**           # 코드와 requirements.txt가 backend/에 있으므로 통째 포함
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    # 핵심: Lambda와 동일한 리눅스 환경에서 빌드 (GitHub Actions 러너에 Docker 있음)
+    dockerizePip: true
+    # requirements.txt가 backend/에 있으므로 경로 지정
+    fileName: backend/requirements.txt
+    # 배포 크기 줄이기 (소스/휠 중 불필요한 것 제거)
+    slim: true
+    # Python 버전 지정(선택): 러너 기본 python이 낮을 때 유용
+    pythonBin: python3
